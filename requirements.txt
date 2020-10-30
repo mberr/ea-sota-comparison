@@ -1,0 +1,10 @@
+numpy>=1.18.4
+pandas>=1.0.3
+torch~=1.6.0
+requests>=2.23.0
+tqdm>=4.46.0  # Progress bar
+mlflow>=1.8.0
+humanize>=2.4.0
+pytorch-pretrained-bert>=0.6.2  # For initialisation with BERT embeddings
+ray>=0.8.5
+frozendict>=1.2
