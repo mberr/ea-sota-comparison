@@ -1,5 +1,6 @@
 # A Critical Assessment of State-of-the-Art in Entity Alignment
 
+[![Arxiv](https://img.shields.io/badge/arXiv-2010.16314-b31b1b)](https://arxiv.org/abs/2010.16314)
 [![Python 3.8](https://img.shields.io/badge/Python-3.8-2d618c?logo=python)](https://docs.python.org/3.8/)
 [![PyTorch](https://img.shields.io/badge/Made%20with-PyTorch-ee4c2c?logo=pytorch)](https://pytorch.org/docs/stable/index.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
@@ -8,6 +9,7 @@ This repository contains the source code for the paper
 ```
 A Critical Assessment of State-of-the-Art in Entity Alignment
 Max Berrendorf, Ludwig Wacker, and Evgeniy Faerman
+https://arxiv.org/abs/2010.16314
 ```
 
 # Installation
