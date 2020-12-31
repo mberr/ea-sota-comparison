@@ -9,7 +9,7 @@ import pandas
 from mlflow.entities import ViewType
 
 from kgm.data import SIDES, get_dataset_by_name
-from kgm.utils.mlflow_utils import ablation, get_metric_history, get_results_from_hpo
+from kgm.utils.mlflow_utils import ablation, best_per_group, get_results_from_hpo
 from kgm.utils.tables import combine_tables, format_ablation_table, normalize_boolean, normalize_embedding_norm, normalize_similarity, normalize_subset
 
 
@@ -156,7 +156,7 @@ def _result_table(output_root: pathlib.Path, force: bool = False, tracking_uri: 
     # normalize dataset
     df["dataset"] = df["dataset"].str.replace("_", "")
     # normalize subset
-    df["subset"] = df["subset"].apply(lambda s: '-'.join(s.split('_')[:2]).lower())
+    df["subset"] = normalize_subset(df=df, column="subset")
     # normalize init
     rename = dict(
         bert_precomputed="BERT",
@@ -208,56 +208,40 @@ def _get_runs_from_mlflow_from_hpo(
     buffer_to: Optional[str] = None,
     force: bool = False,
 ) -> pandas.DataFrame:
-    exp_id = mlflow.get_experiment_by_name(name=experiment_name)
-    if exp_id is None:
-        raise ValueError(f"{experiment_name} does not exist at MLFlow instance at {tracking_uri}")
-    exp_id = exp_id.experiment_id
-    prefix = "metrics."
-    if metric_column.startswith(prefix):
-        metric_column = metric_column[len(prefix):]
-    if validation_metric_column.startswith(prefix):
-        validation_metric_column = validation_metric_column[len(prefix):]
+    # get results (+ early stopping)
+    data = get_results_from_hpo(
+        tracking_uri=tracking_uri,
+        experiment_name=experiment_name,
+        validation_metric_column=validation_metric_column,
+        smaller_is_better=False,
+        additional_metrics=[metric_column],
+        buffer_root=buffer_to,
+        force=force,
+    )
 
-    if buffer_to is None:
-        buffer_to = pathlib.Path("/tmp") / f"{experiment_name}_{method_name}.tsv"
-    if buffer_to.is_file() and not force:
-        logging.info(f"Loading from file {buffer_to}")
-        history = pandas.read_csv(buffer_to, sep="\t")
-    else:
-        logging.info(f"Loading from MLFlow {experiment_name} {exp_id}")
-        # get full history
-        history = get_metric_history(
-            tracking_uri=tracking_uri,
-            experiment_ids=[exp_id],
-            metrics=[metric_column, validation_metric_column],
-            convert_to_wide_format=True,
-        ).reset_index()
-        history.to_csv(buffer_to, sep="\t", index=False)
+    # get best run per group by validation metric
+    data = best_per_group(
+        data=data,
+        group_keys=[
+            dataset_column,
+            subset_column,
+            init_column,
+        ],
+        sort_by=validation_metric_column,
+        sort_ascending=False,
+    )
 
-    # get parameters
-    columns = [dataset_column, subset_column, init_column]
-    runs: pandas.DataFrame = mlflow.search_runs(
-        experiment_ids=[exp_id],
-        run_view_type=ViewType.ACTIVE_ONLY,
-    ).loc[:, ["run_id"] + columns]
-
-    # merge
-    df = runs.merge(right=history, how="inner", on="run_id")
-
-    # get best configuration & epoch according to validation_metric
-    data = []
-    for _, info in df.groupby(by=[dataset_column, subset_column, init_column]):
-        first = info.sort_values(by=validation_metric_column, ascending=False).head(n=1)
-        data.append(first)
-    columns += [metric_column]
-    translation = dict(zip(columns, [
+    # select columns
+    keep_columns = [dataset_column, subset_column, init_column] + [metric_column]
+    data = data.loc[:, keep_columns]
+    # rename
+    translation = dict(zip(keep_columns, [
         "dataset",
         "subset",
         "init",
         "H@1",
     ]))
-    df = pandas.concat(data).loc[:, columns].rename(columns=translation).copy()
-
+    df = data.rename(columns=translation).copy()
     # save method
     df["method"] = method_name
     return df

@@ -439,7 +439,7 @@ def run_experiments(
 
 def get_results_from_hpo(
     tracking_uri: str,
-    experiment_name: str,
+    experiment_name: Union[str, Collection[str]],
     validation_metric_column: str = "eval.validation.hits_at_1",
     smaller_is_better: bool = False,
     additional_metrics: Optional[Collection[str]] = None,
@@ -470,6 +470,20 @@ def get_results_from_hpo(
     :return:
         A dataframe with one line per run, all parameters, and columns for the validation metric and all selected metrics.
     """
+    if not isinstance(experiment_name, str):
+        return pandas.concat([
+            get_results_from_hpo(
+                tracking_uri=tracking_uri,
+                experiment_name=single_experiment_name,
+                validation_metric_column=validation_metric_column,
+                smaller_is_better=smaller_is_better,
+                additional_metrics=additional_metrics,
+                buffer_root=buffer_root,
+                force=force,
+                filter_string=filter_string,
+            )
+            for single_experiment_name in experiment_name
+        ], ignore_index=True)
     mlflow.set_tracking_uri(uri=tracking_uri)
     exp_id = mlflow.get_experiment_by_name(name=experiment_name)
     if exp_id is None:
