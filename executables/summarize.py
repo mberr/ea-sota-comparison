@@ -447,7 +447,7 @@ def _rdgcn_ablation_table(
         param_column = f"params.{param_column}"
         sub_table = []
         for _, group in df.groupby(by=[subset_column, param_column]):
-            best = group.sort_values(by=test_key, ascending=False).iloc[0]
+            best = group.sort_values(by=validation_key, ascending=False).iloc[0]
             sub_table.append((best[subset_column], best[param_column], 100 * best[test_key]))
         sub_table = pandas.DataFrame(
             data=sub_table,
