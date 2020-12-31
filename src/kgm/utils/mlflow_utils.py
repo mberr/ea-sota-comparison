@@ -21,7 +21,7 @@ logger = logging.getLogger(name=__name__)
 
 
 def connect_mlflow(
-    tracking_uri='http://mlflow.dbs.ifi.lmu.de:5000',
+    tracking_uri='http://localhost:5000',
     experiment_name: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> mlflow.ActiveRun:
