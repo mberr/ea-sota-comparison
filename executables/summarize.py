@@ -2,23 +2,15 @@
 import argparse
 import logging
 import pathlib
-from typing import Callable, Mapping, Optional
+from typing import Callable, Optional
 
 import mlflow
 import pandas
 from mlflow.entities import ViewType
 
 from kgm.data import SIDES, get_dataset_by_name
-from kgm.utils.mlflow_utils import get_metric_history
-
-ABLATION_PARAMETERS = {
-    "normalization": "embedding_norm",  # = "model.embedding_norm" + "model.embedding_norm_mode",
-    "GCN layers": "model.num_gcn_layers",
-    "interaction layers": "model.num_interactions",
-    "trainable embeddings": "model.trainable_node_embeddings",
-    "similarity": "similarity",  # = "similarity.cls" + "similarity.transformation"
-    "hard negatives": "hard_negatives",
-}
+from kgm.utils.mlflow_utils import ablation, best_per_group, get_results_from_hpo
+from kgm.utils.tables import combine_tables, format_ablation_table, normalize_boolean, normalize_embedding_norm, normalize_similarity, normalize_subset
 
 
 def latex_bold(text: str) -> str:
@@ -164,7 +156,7 @@ def _result_table(output_root: pathlib.Path, force: bool = False, tracking_uri: 
     # normalize dataset
     df["dataset"] = df["dataset"].str.replace("_", "")
     # normalize subset
-    df["subset"] = df["subset"].apply(lambda s: '-'.join(s.split('_')[:2]).lower())
+    df["subset"] = normalize_subset(df=df, column="subset")
     # normalize init
     rename = dict(
         bert_precomputed="BERT",
@@ -216,56 +208,40 @@ def _get_runs_from_mlflow_from_hpo(
     buffer_to: Optional[str] = None,
     force: bool = False,
 ) -> pandas.DataFrame:
-    exp_id = mlflow.get_experiment_by_name(name=experiment_name)
-    if exp_id is None:
-        raise ValueError(f"{experiment_name} does not exist at MLFlow instance at {tracking_uri}")
-    exp_id = exp_id.experiment_id
-    prefix = "metrics."
-    if metric_column.startswith(prefix):
-        metric_column = metric_column[len(prefix):]
-    if validation_metric_column.startswith(prefix):
-        validation_metric_column = validation_metric_column[len(prefix):]
+    # get results (+ early stopping)
+    data = get_results_from_hpo(
+        tracking_uri=tracking_uri,
+        experiment_name=experiment_name,
+        validation_metric_column=validation_metric_column,
+        smaller_is_better=False,
+        additional_metrics=[metric_column],
+        buffer_root=buffer_to,
+        force=force,
+    )
 
-    if buffer_to is None:
-        buffer_to = pathlib.Path("/tmp") / f"{experiment_name}_{method_name}.tsv"
-    if buffer_to.is_file() and not force:
-        logging.info(f"Loading from file {buffer_to}")
-        history = pandas.read_csv(buffer_to, sep="\t")
-    else:
-        logging.info(f"Loading from MLFlow {experiment_name} {exp_id}")
-        # get full history
-        history = get_metric_history(
-            tracking_uri=tracking_uri,
-            experiment_ids=[exp_id],
-            metrics=[metric_column, validation_metric_column],
-            convert_to_wide_format=True,
-        ).reset_index()
-        history.to_csv(buffer_to, sep="\t", index=False)
+    # get best run per group by validation metric
+    data = best_per_group(
+        data=data,
+        group_keys=[
+            dataset_column,
+            subset_column,
+            init_column,
+        ],
+        sort_by=validation_metric_column,
+        sort_ascending=False,
+    )
 
-    # get parameters
-    columns = [dataset_column, subset_column, init_column]
-    runs: pandas.DataFrame = mlflow.search_runs(
-        experiment_ids=[exp_id],
-        run_view_type=ViewType.ACTIVE_ONLY,
-    ).loc[:, ["run_id"] + columns]
-
-    # merge
-    df = runs.merge(right=history, how="inner", on="run_id")
-
-    # get best configuration & epoch according to validation_metric
-    data = []
-    for _, info in df.groupby(by=[dataset_column, subset_column, init_column]):
-        first = info.sort_values(by=validation_metric_column, ascending=False).head(n=1)
-        data.append(first)
-    columns += [metric_column]
-    translation = dict(zip(columns, [
+    # select columns
+    keep_columns = [dataset_column, subset_column, init_column] + [metric_column]
+    data = data.loc[:, keep_columns]
+    # rename
+    translation = dict(zip(keep_columns, [
         "dataset",
         "subset",
         "init",
         "H@1",
     ]))
-    df = pandas.concat(data).loc[:, columns].rename(columns=translation).copy()
-
+    df = data.rename(columns=translation).copy()
     # save method
     df["method"] = method_name
     return df
@@ -354,117 +330,70 @@ def _normalize_subset(df: pandas.DataFrame, column: str, drop_suffix: str = "-15
 def _rdgcn_ablation_table(
     output_root: pathlib.Path,
     force: bool = False,
-    parameters: Mapping[str, str] = ABLATION_PARAMETERS,
     tracking_uri: str = "http://localhost:5000",
 ) -> None:
     """Generate ablation table."""
     filter_string = """params.data.dataset='openea'"""
-    subset_column = "params.data.subset"
     validation_key = "eval.validation.hits_at_1"
     test_key = "eval.test.hits_at_1"
+    experiment_name = "rdgcn"
 
     output_root = output_root / "ablation"
     output_root.mkdir(exist_ok=True, parents=True)
 
-    mlflow.set_tracking_uri(tracking_uri)
-    experiment_name = "rdgcn"
-    experiment_id = mlflow.get_experiment_by_name(name=experiment_name)
-    if experiment_id is None:
-        raise ValueError(f"No experiment with name {experiment_name} at {tracking_uri}.")
+    # Get results from HPO
+    df = get_results_from_hpo(
+        tracking_uri=tracking_uri,
+        experiment_name=experiment_name,
+        validation_metric_column=validation_key,
+        smaller_is_better=False,
+        additional_metrics=[test_key],
+        buffer_root=output_root,
+        force=force,
+        filter_string=filter_string,
+    )
 
-    # parameters
-    param_buffer_path = output_root / "params.tsv"
-    if param_buffer_path.is_file() and not force:
-        logging.info("Loading parameters from file")
-        params = pandas.read_csv(param_buffer_path, sep="\t")
-    else:
-        logging.info("Loading parameters from MLFLow")
-        params = mlflow.search_runs(
-            experiment_ids=[experiment_id],
-            filter_string=filter_string,
-            run_view_type=ViewType.ACTIVE_ONLY,
-        )
-        params.to_csv(param_buffer_path, sep="\t", index=False)
+    # normalize columns
+    df["normalization"] = normalize_embedding_norm(
+        df=df,
+        embedding_norm_method_column="model.embedding_norm",
+        embedding_norm_mode_column="model.embedding_norm_mode",
+    )
+    df["subset"] = normalize_subset(df=df, column="data.subset")
+    df["similarity"] = normalize_similarity(
+        df=df,
+        cls_column_name="similarity.cls",
+        transformation_column_name="similarity.transformation",
+    )
+    df["GCN layers"] = df["model.num_gcn_layers"]
+    df["interaction layers"] = df["model.num_interactions"]
+    df["trainable embeddings"] = normalize_boolean(df=df, column="model.trainable_node_embeddings")
+    df["hard_negatives"] = df["training.sampler"] == "hard_negative"
+    df["hard negatives"] = normalize_boolean(df=df, column="hard_negatives")
 
-    missing_metrics = {f"metrics.{key}" for key in [test_key, validation_key]}.difference(params.columns)
-    if len(missing_metrics) > 0:
-        raise ValueError(f"Missing metrics in experiments {experiment_name} at {tracking_uri}: {missing_metrics}")
+    ablation_df = ablation(
+        data=df,
+        ablation_parameter=[
+            "normalization",
+            "GCN layers",
+            "interaction layers",
+            "trainable embeddings",
+            "similarity",
+            "hard negatives",
+        ],
+        group_keys="subset",
+        sort_by=validation_key,
+        sort_ascending=False,
+    )
 
-    # metric history
-    metric_buffer_path = output_root / "metrics.tsv"
-    if metric_buffer_path.is_file() and not force:
-        logging.info(f"Loading metrics from file {metric_buffer_path}")
-        metrics = pandas.read_csv(
-            metric_buffer_path,
-            sep="\t",
-        )
-    else:
-        logging.info(f"Loading metrics from MLFlow {experiment_id}")
-
-        metrics = get_metric_history(
-            tracking_uri=tracking_uri,
-            experiment_ids=experiment_id,
-            runs=params["run_id"].tolist(),
-            metrics=[validation_key, test_key],
-            convert_to_wide_format=True,
-        )
-        metrics.to_csv(
-            metric_buffer_path,
-            sep="\t",
-        )
-
-    result_buffer_path = output_root / "best.tsv"
-    if result_buffer_path.is_file() and not force:
-        df = pandas.read_csv(result_buffer_path, sep="\t")
-    else:
-        # early stopping
-        best_metrics = []
-        for run_id, group in metrics.groupby(by="run_id"):
-            best_metrics.append(group.sort_values(by=validation_key, ascending=False).head(n=1))
-        metrics = pandas.concat(best_metrics)
-        df = params.merge(right=metrics, how="inner", on="run_id")
-        df.to_csv(result_buffer_path, sep="\t", index=False)
-
-    # normalization: embedding norm
-    _normalize_embedding_norm(df)
-
-    # normalization: hard negative mining
-    _normalize_boolean_(df, column="params.model.trainable_node_embeddings")
-
-    # normalization: similarity
-    _normalize_similarity(df)
-
-    # normalization: hard negative mining
-    df["params.hard_negatives"] = df["params.training.sampler"] == "hard_negative"
-    _normalize_boolean_(df=df, column="params.hard_negatives")
-
-    # normalization: subset
-    _normalize_subset(df, column=subset_column, drop_suffix="-15k-v2")
-
-    # generate table
-    table = []
-    for param, param_column in parameters.items():
-        param_column = f"params.{param_column}"
-        sub_table = []
-        for _, group in df.groupby(by=[subset_column, param_column]):
-            best = group.sort_values(by=test_key, ascending=False).iloc[0]
-            sub_table.append((best[subset_column], best[param_column], 100 * best[test_key]))
-        sub_table = pandas.DataFrame(
-            data=sub_table,
-            columns=["subset", "value", "test_performance"]
-        ).set_index(["value", "subset"]).unstack().apply(
-            highlight_max,
-            float_formatter="{:2.2f}".format,
-            highlighter=latex_bold,
-        )
-        sub_table["parameter"] = r"\midrule " + param
-        sub_table = sub_table.reset_index().set_index(["parameter", "value"])
-        table.append(sub_table)
-
-    table = pandas.concat(table)
-    # manually escape underscore
-    table = table.applymap(lambda s: s.replace("_", r"\_"))
-    print(table.to_latex(escape=False))
+    table = combine_tables(
+        *(
+            format_ablation_table(df=ablation_df, cell_value=metric, groups=["subset"], float_formatter=lambda x: f"{100 * x:2.2f}")
+            for metric in ["eval.validation.hits_at_1", "eval.test.hits_at_1"]
+        ),
+    )
+    with (output_root / "table.tex").open("w") as f:
+        f.write(table.to_latex(escape=False))
 
 
 if __name__ == '__main__':
