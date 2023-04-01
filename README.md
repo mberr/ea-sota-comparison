@@ -46,20 +46,24 @@ TRACKING_URI=http://localhost:5000
 ```
 
 ## OpenEA RDGCN embeddings
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.6985518.svg)](https://doi.org/10.5281/zenodo.6985518)
+
 Please download the RDGCN embeddings extracted with the [OpenEA codebase](https://github.com/nju-websoft/OpenEA/tree/2a6e0b03ec8cdcad4920704d1c38547a3ad72abe)
-from [here](https://www.dbs.ifi.lmu.de/~berrendorf/ea-sota-comparison/openea_rdgcn_embeddings/)
+from [here](https://doi.org/10.5281/zenodo.6985518)
 and place them in `~/.kgm/openea_rdgcn_embeddings`.
-They require around 160MiB storage.
+They have a file name matching the pattern `*_*_15K_V2.pt` and require in total around 160MiB storage.
 
 ## BERT initialization
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.6985518.svg)](https://doi.org/10.5281/zenodo.6985518)
+
 To generate data for the BERT-based initialization, run
 ```shell script
 (venv) PYTHONPATH=./src python3 executables/prepare_bert.py
 ```
 
-We also provide preprocessed files at [this url](https://www.dbs.ifi.lmu.de/~berrendorf/ea-sota-comparison/bert_prepared/).
+We also provide preprocessed files at [this url](https://doi.org/10.5281/zenodo.6985518).
 If you prefer to use those, please download and place them in `~/.kgm/bert_prepared`. 
-They require around 6.1GiB storage. 
+They have a file name matching `*_bert-base-multilingual-cased_*` and require in total around 6.1GiB storage. 
 
 # Experiments
 
